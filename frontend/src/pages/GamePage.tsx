@@ -494,8 +494,7 @@ export default function GamePage() {
     };
 
     return (
-        <div className="flex flex-col lg:flex-row py-4 px-2 lg:px-6 gap-4 lg:gap-6 w-full mx-auto max-w-[1800px] h-auto lg:h-[calc(100vh-2rem)] min-h-0">
-
+        <div className="flex flex-col lg:flex-row py-4 gap-4 lg:gap-6 w-[calc(100vw-32px)] lg:w-[calc(100vw-200px)] mx-auto h-auto lg:h-[calc(100vh-2rem)] min-h-0">
             <div className="w-full lg:w-[320px] xl:w-[360px] flex flex-col shrink-0 bg-zinc-900 border border-zinc-800 rounded-2xl overflow-hidden h-[400px] lg:h-full shadow-2xl min-h-0">
                 <div className="p-4 border-b border-zinc-800 bg-zinc-950 shrink-0">
                     <div className="flex items-center gap-3 text-zinc-300 mb-4">
