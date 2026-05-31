@@ -14,7 +14,6 @@ app.use(express.json());
 
 const server = http.createServer(app);
 
-// Initialize WebSockets
 const io = new Server(server, {
     cors: { origin: '*', methods: ['GET', 'POST'] }
 });
@@ -34,20 +33,31 @@ const authenticate = async (req: express.Request, res: express.Response, next: e
     (req as any).user = user;
     next();
 };
-
-// --- WEBSOCKET GAMEPLAY HANDLERS (No DB Polling!) ---
 io.on('connection', (socket) => {
     socket.on('join_game', (gameId) => {
         socket.join(gameId);
     });
 
     socket.on('make_move', (data) => {
-        // Instantly broadcast the move and clock times to the opponent
         socket.to(data.gameId).emit('receive_move', data);
     });
-});
 
-// --- REST API ROUTES ---
+    socket.on('send_message', (data) => {
+        socket.to(data.gameId).emit('receive_message', data);
+    });
+
+    socket.on('offer_draw', (data) => {
+        socket.to(data.gameId).emit('draw_offered', data);
+    });
+
+    socket.on('decline_draw', (data) => {
+        socket.to(data.gameId).emit('draw_declined', data);
+    });
+
+    socket.on('game_over', (data) => {
+        socket.to(data.gameId).emit('game_over_update', data);
+    });
+});
 app.get('/api/profiles/search/:query', authenticate, async (req, res) => {
     const { data, error } = await supabase.from('profiles').select('id,username,rating').ilike('username', `%${req.params.query}%`).neq('id', (req as any).user.id).limit(8);
     res.json({ data, error });
@@ -78,7 +88,6 @@ app.post('/api/games', authenticate, async (req, res) => {
     res.json({ data, error });
 });
 
-// Background Syncing
 app.post('/api/games/moves', authenticate, async (req, res) => {
     const { data, error } = await supabase.from('game_moves').insert(req.body);
     res.json({ data, error });
@@ -89,7 +98,6 @@ app.put('/api/games/:id', authenticate, async (req, res) => {
     res.json({ data, error });
 });
 
-// --- MATCHMAKING ENGINE ---
 interface QueueTicket { id: string; userId: string; rating: number; timeMin: number; timeInc: number; joinedAt: number; matchedGameId: string | null; }
 let queue: QueueTicket[] = [];
 let isMatchingLoopRunning = false;

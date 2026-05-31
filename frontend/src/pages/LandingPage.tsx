@@ -9,18 +9,18 @@ export default function LandingPage() {
   const { user, profile } = useAuth();
   const navigate = useNavigate();
   
-  // Matchmaking State
+
   const [isSearching, setIsSearching] = useState(false);
   const [searchSeconds, setSearchSeconds] = useState(0);
   const [activeTicketId, setActiveTicketId] = useState<string | null>(null);
 
-  // Bot State
+
   const [showBotModal, setShowBotModal] = useState(false);
   const [botDifficulty, setBotDifficulty] = useState<'easy' | 'medium' | 'hard'>('medium');
   const [botColor, setBotColor] = useState<'white' | 'black' | 'random'>('random');
-  const [botTc, setBotTc] = useState(TIME_CONTROLS[7]); // Defaults to 10+0 Rapid
+  const [botTc, setBotTc] = useState(TIME_CONTROLS[7]);
 
-  // Handle Matchmaking Polling
+
   useEffect(() => {
     if (!isSearching || !activeTicketId) return;
 
@@ -92,7 +92,6 @@ export default function LandingPage() {
           </div>
         </div>
 
-        {/* Right Side: 3x3 Grid */}
         <div id="quick-pair" className="w-full max-w-[420px] bg-zinc-900 border border-zinc-800 rounded-2xl p-6 shadow-2xl">
           <h2 className="text-xs font-bold text-zinc-500 mb-4 uppercase tracking-wider text-center">Quick Pairing</h2>
           <div className="grid grid-cols-3 gap-3">
@@ -113,7 +112,6 @@ export default function LandingPage() {
         </div>
       </div>
 
-      {/* Matchmaking Overlay */}
       {isSearching && (
         <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
           <div className="bg-zinc-950 border border-zinc-800 rounded-2xl p-8 w-full max-w-sm text-center flex flex-col items-center">
@@ -127,7 +125,6 @@ export default function LandingPage() {
         </div>
       )}
 
-      {/* Bot Game Modal */}
       {showBotModal && (
         <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4" onClick={() => setShowBotModal(false)}>
           <div className="bg-zinc-950 border border-zinc-800 rounded-2xl p-6 w-full max-w-md" onClick={e => e.stopPropagation()}>

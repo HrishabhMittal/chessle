@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from 'react';
 import { useParams, useSearchParams, useNavigate } from 'react-router-dom';
 import {
     Chessboard,
-    type ChessboardOptions,
     type PieceDropHandlerArgs,
     type PieceHandlerArgs,
     type SquareHandlerArgs,
@@ -17,7 +16,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { api } from '../lib/api';
 import { formatTime } from '../lib/gameUtils';
 import { getBotMove } from '../lib/stockfish';
-import { Flag, RotateCcw, Home, Info } from 'lucide-react';
+import { Flag, RotateCcw, Home, Info, Rabbit, Skull, Handshake } from 'lucide-react';
 
 interface GameData {
     id: string;
@@ -38,7 +37,12 @@ interface GameData {
     bot_color: string;
 }
 
-// Converts FEN to Object for Premove Overlays
+interface ChatMessage {
+    sender: string;
+    text: string;
+    isSystem?: boolean;
+}
+
 function fenToObj(fen: string): PositionDataType {
     const obj: PositionDataType = {};
     const rows = fen.split(' ')[0].split('/');
@@ -66,7 +70,6 @@ export default function GamePage() {
     const navigate = useNavigate();
     const { user, loading: authLoading } = useAuth();
 
-    // 1. Core State
     const chessGameRef = useRef(new Chess());
     const chessGame = chessGameRef.current;
     const [chessPosition, setChessPosition] = useState(chessGame.fen());
@@ -86,12 +89,15 @@ export default function GamePage() {
     const [gameOver, setGameOver] = useState(false);
     const [showResignModal, setShowResignModal] = useState(false);
 
-    // 2. Interactive Mechanics State (Now explicitly typed with native chessboard types)
     const [moveFrom, setMoveFrom] = useState('');
     const [optionSquares, setOptionSquares] = useState<Record<string, React.CSSProperties>>({});
     const [premoves, setPremoves] = useState<{ sourceSquare: string, targetSquare: string, piece: DraggingPieceDataType }[]>([]);
     const premovesRef = useRef<{ sourceSquare: string, targetSquare: string, piece: DraggingPieceDataType }[]>([]);
     const [promotionMove, setPromotionMove] = useState<{ sourceSquare: string, targetSquare: string } | null>(null);
+
+    const [drawOfferedBy, setDrawOfferedBy] = useState<'white' | 'black' | null>(null);
+    const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+    const [chatInput, setChatInput] = useState('');
 
     const [_, setSocket] = useState<Socket | null>(null);
     const socketRef = useRef<Socket | null>(null);
@@ -99,8 +105,12 @@ export default function GamePage() {
     const clockRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const lastTickRef = useRef<number>(Date.now());
     const botThinkingRef = useRef(false);
+    const chatEndRef = useRef<HTMLDivElement>(null);
 
-    // --- INITIALIZATION ---
+    useEffect(() => {
+        chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }, [chatMessages]);
+
     useEffect(() => {
         if (!authLoading && gameId && user) loadGame();
     }, [gameId, user, authLoading]);
@@ -120,9 +130,12 @@ export default function GamePage() {
             setChessPosition(chessGame.fen());
             setMoveHistory(chessGame.history({ verbose: true }).map(m => ({ san: m.san, color: m.color === 'w' ? 'white' : 'black' })));
         }
-        if (data.status !== 'active') setGameOver(true);
+        if (data.status !== 'active') {
+            setGameOver(true);
+            setResult(data.result);
+            setResultReason(data.result_reason);
+        }
 
-        // Determine player color and flip board correctly
         let color: 'white' | 'black' | null = null;
         if (data.white_player_id === user?.id) color = 'white';
         else if (data.black_player_id === user?.id) color = 'black';
@@ -131,7 +144,6 @@ export default function GamePage() {
         if (color) setBoardOrientation(color);
     }
 
-    // --- WEBSOCKETS ---
     useEffect(() => {
         const newSocket = io(import.meta.env.VITE_API_URL?.replace('/api', '') || 'http://localhost:3000');
         setSocket(newSocket);
@@ -141,18 +153,15 @@ export default function GamePage() {
             newSocket.emit('join_game', gameId);
 
             newSocket.on('receive_move', (data) => {
-                // Apply move received from opponent
                 chessGame.move(data.move);
                 setChessPosition(chessGame.fen());
-
-                // Sync clocks and turn
                 setWhiteTimeMs(data.whiteTimeMs);
                 setBlackTimeMs(data.blackTimeMs);
                 setCurrentTurn(chessGame.turn() === 'w' ? 'white' : 'black');
                 setMoveHistory(data.history);
                 lastTickRef.current = Date.now();
+                setDrawOfferedBy(null);
 
-                // Process Premoves if any exist
                 if (premovesRef.current.length > 0) {
                     const nextPremove = premovesRef.current[0];
                     premovesRef.current.splice(0, 1);
@@ -167,11 +176,27 @@ export default function GamePage() {
                     }, 300);
                 }
             });
+
+            newSocket.on('receive_message', (data) => {
+                setChatMessages(prev => [...prev, { sender: 'Opponent', text: data.text }]);
+            });
+
+            newSocket.on('draw_offered', (data) => {
+                setDrawOfferedBy(data.color);
+            });
+
+            newSocket.on('draw_declined', () => {
+                setDrawOfferedBy(null);
+                setChatMessages(prev => [...prev, { sender: 'System', text: 'Draw offer declined.', isSystem: true }]);
+            });
+
+            newSocket.on('game_over_update', (data) => {
+                endGame(data.winner, data.reason, false);
+            });
         }
         return () => { newSocket.disconnect(); };
     }, [gameId, chessGame]);
 
-    // --- TIMERS ---
     useEffect(() => {
         if (gameOver || gameStatus !== 'active' || moveHistory.length === 0) {
             lastTickRef.current = Date.now();
@@ -189,16 +214,46 @@ export default function GamePage() {
 
     async function handleTimeout(color: 'white' | 'black') {
         if (clockRef.current) clearInterval(clockRef.current);
-        await endGame(color === 'white' ? 'black' : 'white', 'timeout');
+        await endGame(color === 'white' ? 'black' : 'white', 'timeout', true);
     }
 
-    async function endGame(winner: 'white' | 'black' | 'draw', reason: string) {
+    async function endGame(winner: 'white' | 'black' | 'draw', reason: string, emitState = true) {
         if (!gameId) return;
         setGameOver(true); setResult(winner); setResultReason(reason); setGameStatus('completed');
+
         if (myColor) await api.updateGame(gameId, { status: 'completed', result: winner, result_reason: reason, ended_at: new Date().toISOString() });
+
+        if (emitState && socketRef.current) {
+            socketRef.current.emit('game_over', { gameId, winner, reason });
+        }
     }
 
-    // --- BOT ENGINE ---
+    function sendChat(e: React.FormEvent) {
+        e.preventDefault();
+        if (!chatInput.trim() || !gameId) return;
+
+        socketRef.current?.emit('send_message', { gameId, text: chatInput.trim() });
+        setChatMessages(prev => [...prev, { sender: 'You', text: chatInput.trim() }]);
+        setChatInput('');
+    }
+
+    function offerDraw() {
+        if (!myColor || !gameId) return;
+        setDrawOfferedBy(myColor);
+        socketRef.current?.emit('offer_draw', { gameId, color: myColor });
+        setChatMessages(prev => [...prev, { sender: 'System', text: 'You offered a draw.', isSystem: true }]);
+    }
+
+    function acceptDraw() {
+        endGame('draw', 'agreement', true);
+    }
+
+    function declineDraw() {
+        setDrawOfferedBy(null);
+        socketRef.current?.emit('decline_draw', { gameId });
+        setChatMessages(prev => [...prev, { sender: 'System', text: 'You declined the draw offer.', isSystem: true }]);
+    }
+
     useEffect(() => {
         if (!game?.is_bot_game || gameOver || currentTurn !== game.bot_color || botThinkingRef.current) return;
         botThinkingRef.current = true;
@@ -215,11 +270,10 @@ export default function GamePage() {
         }, 500);
     }, [currentTurn, game, gameOver, botDifficulty, chessGame]);
 
-    // --- BROADCAST & EXECUTE MOVES ---
     function broadcastMove(moveResult: any) {
         if (!gameId) return;
+        setDrawOfferedBy(null);
 
-        // Calculate new clocks
         const elapsed = Date.now() - lastTickRef.current;
         const inc = (game?.time_control_increment ?? 0) * 1000;
         let newW = whiteTimeMs, newB = blackTimeMs;
@@ -238,24 +292,20 @@ export default function GamePage() {
         const history = chessGame.history({ verbose: true }).map(m => ({ san: m.san, color: m.color === 'w' ? 'white' : 'black' }));
         setMoveHistory(history);
 
-        // Websocket Emit
         if (socketRef.current && !game?.is_bot_game) {
             socketRef.current.emit('make_move', {
                 gameId, move: moveResult, history, whiteTimeMs: newW, blackTimeMs: newB
             });
         }
 
-        // Background sync to DB
         api.updateGame(gameId, { pgn: chessGame.pgn(), fen: chessGame.fen(), current_turn: chessGame.turn() === 'w' ? 'white' : 'black', white_time_ms: newW, black_time_ms: newB, move_count: history.length });
 
-        // End conditions
         if (chessGame.isGameOver()) {
-            if (chessGame.isCheckmate()) endGame(chessGame.turn() === 'w' ? 'black' : 'white', 'checkmate');
-            else endGame('draw', 'draw');
+            if (chessGame.isCheckmate()) endGame(chessGame.turn() === 'w' ? 'black' : 'white', 'checkmate', true);
+            else endGame('draw', 'draw', true);
         }
     }
 
-    // --- CLICK TO MOVE LOGIC ---
     function getMoveOptions(square: Square) {
         const moves = chessGame.moves({ square, verbose: true });
         if (moves.length === 0) {
@@ -277,13 +327,9 @@ export default function GamePage() {
     }
 
     function onSquareClick({ square }: SquareHandlerArgs) {
-        console.log("square clicked")
         if (gameOver || !myColor) return;
 
-        // Always rely on our underlying chess engine for truth
         const piece = chessGame.get(square as Square);
-
-        // Don't allow selecting opponent pieces if nothing is selected
         if (!moveFrom && piece && piece.color !== myColor[0]) return;
 
         if (!moveFrom && piece) {
@@ -317,24 +363,20 @@ export default function GamePage() {
         setOptionSquares({});
     }
 
-    // --- DRAG TO MOVE & PREMOVES LOGIC ---
     function onPieceDrop({ piece, sourceSquare, targetSquare }: PieceDropHandlerArgs): boolean {
-        console.log("peice drop")
         if (gameOver || !myColor) return false;
         if (!targetSquare || sourceSquare === targetSquare) return false;
 
         const pieceType: string = (piece as any).pieceType || piece;
         const pieceColor = pieceType.charAt(0).toLowerCase();
 
-        // 1. Premove Registration
         if (chessGame.turn() !== pieceColor) {
-            if (pieceColor !== myColor[0]) return false; // cant drag enemy
+            if (pieceColor !== myColor[0]) return false;
             premovesRef.current.push({ sourceSquare, targetSquare, piece });
             setPremoves([...premovesRef.current]);
             return true;
         }
 
-        // 2. Promotion Modal
         const isPawn = pieceType.toLowerCase().charAt(1) === 'p';
         if (isPawn && (targetSquare[1] === '8' || targetSquare[1] === '1')) {
             const possibleMoves = chessGame.moves({ square: sourceSquare as Square, verbose: true });
@@ -345,7 +387,6 @@ export default function GamePage() {
             return false;
         }
 
-        // 3. Normal Move Execution
         try {
             const moveResult = chessGame.move({ from: sourceSquare, to: targetSquare, promotion: 'q' });
             if (moveResult) {
@@ -381,23 +422,19 @@ export default function GamePage() {
     }
 
     function onSquareRightClick() {
-        console.log("square right clicked")
         premovesRef.current = [];
         setPremoves([...premovesRef.current]);
     }
 
     function canDragPiece({ piece }: PieceHandlerArgs) {
-        console.log("can drag peice")
         if (!piece || !myColor || gameOver) return false;
         const pieceType: string = (piece as any).pieceType || piece;
         return pieceType.charAt(0).toLowerCase() === myColor[0];
     }
 
-    // --- VISUAL RENDERING OVERLAYS ---
     const positionObj = fenToObj(chessPosition);
     const customSquareStyles: Record<string, React.CSSProperties> = { ...optionSquares };
 
-    // Overlay Premoves
     for (const p of premoves) {
         delete positionObj[p.sourceSquare];
         positionObj[p.targetSquare] = p.piece;
@@ -405,7 +442,6 @@ export default function GamePage() {
         customSquareStyles[p.targetSquare] = { backgroundColor: 'rgba(255, 0, 0, 0.2)' };
     }
 
-    // Overlay Previous Move Highlights
     if (moveHistory.length > 0) {
         const historyVerbose = chessGame.history({ verbose: true });
         if (historyVerbose.length > 0) {
@@ -415,7 +451,6 @@ export default function GamePage() {
         }
     }
 
-    // Overlay King Check Highlight
     if (chessGame.inCheck()) {
         const board = chessGame.board();
         for (let r = 0; r < 8; r++) {
@@ -429,7 +464,6 @@ export default function GamePage() {
         }
     }
 
-    // UI Formatting
     const oppColor = boardOrientation === 'white' ? 'black' : 'white';
     const myTime = boardOrientation === 'white' ? whiteTimeMs : blackTimeMs;
     const oppTime = oppColor === 'white' ? whiteTimeMs : blackTimeMs;
@@ -445,7 +479,7 @@ export default function GamePage() {
         );
     }
 
-    const boardOptions: ChessboardOptions = {
+    const boardOptions = {
         id: "MultiplayerBoard",
         position: positionObj,
         boardOrientation: boardOrientation,
@@ -457,37 +491,79 @@ export default function GamePage() {
         darkSquareStyle: { backgroundColor: '#70828e' },
         lightSquareStyle: { backgroundColor: '#c3cdd4' },
         animationDurationInMs: 200,
-    }
+    };
 
     return (
-        <div className="flex-1 flex flex-col lg:flex-row p-4 gap-6 w-full h-full min-h-0 mx-auto max-w-7xl">
+        <div className="flex flex-col lg:flex-row py-4 px-2 lg:px-6 gap-4 lg:gap-6 w-full mx-auto max-w-[1800px] h-auto lg:h-[calc(100vh-2rem)] min-h-0">
 
-            {/* UNBREAKABLE LAYOUT CONTAINER - Prevents clipping */}
-            <div className="flex-1 w-full h-full flex flex-col items-center justify-center p-2">
-                {/* Responsive container binds to screen height specifically */}
-                <div style={{ width: '100%', maxWidth: 'calc(100vh - 120px)', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            <div className="w-full lg:w-[320px] xl:w-[360px] flex flex-col shrink-0 bg-zinc-900 border border-zinc-800 rounded-2xl overflow-hidden h-[400px] lg:h-full shadow-2xl min-h-0">
+                <div className="p-4 border-b border-zinc-800 bg-zinc-950 shrink-0">
+                    <div className="flex items-center gap-3 text-zinc-300 mb-4">
+                        <Rabbit size={24} className="text-zinc-400" />
+                        <div>
+                            <div className="text-sm font-semibold">{game?.time_control_minutes}+{game?.time_control_increment} • Rated • {game?.is_bot_game ? 'Computer' : 'Rapid'}</div>
+                            <div className="text-xs text-zinc-500">Live Game</div>
+                        </div>
+                    </div>
+
+                    <div className="flex flex-col gap-2 mb-2">
+                        <div className="flex items-center gap-2 text-sm text-zinc-200">
+                            <span className="w-3 h-3 rounded-full bg-white"></span>
+                            <span>White Player</span>
+                        </div>
+                        <div className="flex items-center gap-2 text-sm text-zinc-200">
+                            <span className="w-3 h-3 rounded-full bg-zinc-600 border border-zinc-500"></span>
+                            <span>Black Player</span>
+                        </div>
+                    </div>
+
+                    {gameOver && (
+                        <div className="mt-4 pt-4 border-t border-zinc-800/50 text-sm font-semibold text-center text-zinc-300">
+                            {result === 'draw' ? 'Draw' : result === 'white' ? 'White is victorious' : 'Black is victorious'} • {resultReason}
+                        </div>
+                    )}
+                </div>
+
+                <div className="flex-1 overflow-y-auto p-3 flex flex-col gap-2 bg-zinc-900">
+                    {chatMessages.map((msg, i) => (
+                        <div key={i} className={`text-sm ${msg.isSystem ? 'text-zinc-500 italic text-center' : 'text-zinc-300'}`}>
+                            {!msg.isSystem && <span className="font-bold text-zinc-400 mr-2">{msg.sender}:</span>}
+                            {msg.text}
+                        </div>
+                    ))}
+                    <div ref={chatEndRef} />
+                </div>
+
+                {!game?.is_bot_game && (
+                    <form onSubmit={sendChat} className="p-2 border-t border-zinc-800 bg-zinc-900 shrink-0">
+                        <input
+                            type="text"
+                            value={chatInput}
+                            onChange={(e) => setChatInput(e.target.value)}
+                            placeholder="Please be nice in the chat!"
+                            className="w-full bg-zinc-900 border border-zinc-700 rounded p-2 text-sm text-zinc-200 focus:outline-none focus:border-zinc-500"
+                        />
+                    </form>
+                )}
+            </div>
+
+            <div className="flex-1 min-w-0 w-full min-h-[500px] lg:min-h-0 flex flex-col items-center justify-center">
+
+                <div className="w-full max-w-[600px] lg:max-w-[min(100%,calc(100vh-12rem))] flex flex-col gap-3 mx-auto">
 
                     {renderClock(oppColor, oppTime, currentTurn === oppColor && !gameOver)}
 
                     <div
                         className="w-full aspect-square relative shadow-2xl rounded-sm bg-zinc-900"
-                        onContextMenu={(e) => {
-                            e.preventDefault();
-                            onSquareRightClick();
-                        }}
+                        onContextMenu={(e) => { e.preventDefault(); onSquareRightClick(); }}
                     >
                         <Chessboard options={boardOptions} />
 
-                        {/* Promotion Overlay */}
                         {promotionMove && (
                             <div className="absolute inset-0 bg-black/60 z-20 flex items-center justify-center backdrop-blur-sm">
                                 <div className="bg-zinc-800 p-5 rounded-2xl flex gap-3 shadow-2xl border border-zinc-700">
                                     {['q', 'r', 'n', 'b'].map(p => (
-                                        <button
-                                            key={p}
-                                            onClick={() => onPromotionPieceSelect(p)}
-                                            className="w-16 h-16 bg-zinc-700 hover:bg-zinc-600 rounded-xl flex items-center justify-center text-4xl shadow-sm transition-colors"
-                                        >
+                                        <button key={p} onClick={() => onPromotionPieceSelect(p)} className="w-16 h-16 bg-zinc-700 hover:bg-zinc-600 rounded-xl flex items-center justify-center text-4xl shadow-sm transition-colors">
                                             <img src={`https://www.chess.com/chessathons/pieces/${myColor === 'white' ? 'w' : 'b'}${p}.png`} alt={p} className="w-12 h-12" onError={(e) => { e.currentTarget.style.display = 'none'; e.currentTarget.parentElement!.innerHTML = myColor === 'white' ? (p === 'q' ? '♕' : p === 'r' ? '♖' : p === 'n' ? '♘' : '♗') : (p === 'q' ? '♛' : p === 'r' ? '♜' : p === 'n' ? '♞' : '♝') }} />
                                         </button>
                                     ))}
@@ -495,7 +571,6 @@ export default function GamePage() {
                             </div>
                         )}
 
-                        {/* Game Over Overlay */}
                         {gameOver && (
                             <div className="absolute inset-0 bg-black/80 flex items-center justify-center z-10 flex-col gap-4 text-center p-4 backdrop-blur-sm">
                                 <div className="text-4xl font-extrabold text-white tracking-tight">{result === 'draw' ? 'Draw' : result === myColor ? 'Victory' : 'Defeat'}</div>
@@ -509,11 +584,9 @@ export default function GamePage() {
                 </div>
             </div>
 
-            {/* Sidebar Utilities */}
-            <div className="w-full lg:w-80 flex flex-col shrink-0 bg-zinc-900 border border-zinc-800 rounded-2xl overflow-hidden h-full shadow-2xl">
-                <div className="p-5 border-b border-zinc-800 bg-zinc-950 flex items-center gap-2 text-sm font-bold text-zinc-300 uppercase tracking-wider">
-                    <Info size={16} className="text-zinc-500" />
-                    {game?.time_control_minutes}+{game?.time_control_increment} {game?.is_bot_game ? 'vs Computer' : 'Rated'}
+            <div className="w-full lg:w-[320px] xl:w-[360px] flex flex-col shrink-0 bg-zinc-900 border border-zinc-800 rounded-2xl overflow-hidden h-[400px] lg:h-full shadow-2xl min-h-0">
+                <div className="p-5 border-b border-zinc-800 bg-zinc-950 flex items-center gap-2 text-sm font-bold text-zinc-300 uppercase tracking-wider shrink-0">
+                    <Info size={16} className="text-zinc-500" /> Game Moves
                 </div>
 
                 <div className="flex-1 overflow-y-auto p-2 min-h-0 bg-zinc-900">
@@ -533,28 +606,46 @@ export default function GamePage() {
                 </div>
 
                 <div className="p-4 border-t border-zinc-800 bg-zinc-950 flex flex-col gap-3 shrink-0">
+                    {drawOfferedBy === oppColor && !gameOver && (
+                        <div className="p-3 bg-blue-900/30 border border-blue-800/50 rounded-xl flex flex-col gap-2">
+                            <span className="text-blue-200 text-sm font-bold text-center">Opponent offered a draw</span>
+                            <div className="flex gap-2">
+                                <button onClick={acceptDraw} className="flex-1 bg-blue-600 hover:bg-blue-500 text-white rounded-lg py-1 text-sm font-bold transition-colors">Accept</button>
+                                <button onClick={declineDraw} className="flex-1 bg-zinc-700 hover:bg-zinc-600 text-zinc-300 rounded-lg py-1 text-sm font-bold transition-colors">Decline</button>
+                            </div>
+                        </div>
+                    )}
+
                     <div className="flex gap-2">
                         <button onClick={() => setBoardOrientation(o => o === 'white' ? 'black' : 'white')} className="flex-1 py-3 bg-zinc-800 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-700 rounded-xl flex items-center justify-center transition-colors"><RotateCcw size={18} /></button>
                         <button onClick={() => navigate('/')} className="flex-1 py-3 bg-zinc-800 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-700 rounded-xl flex items-center justify-center transition-colors"><Home size={18} /></button>
                     </div>
                     {!gameOver && myColor && (
                         <div className="flex gap-2">
-                            <button onClick={() => endGame('draw', 'agreement')} className="flex-1 bg-zinc-800 text-zinc-300 rounded-xl text-sm font-bold hover:bg-zinc-700 transition-colors">Offer Draw</button>
-                            <button onClick={() => setShowResignModal(true)} className="flex items-center justify-center gap-2 flex-1 bg-red-950/40 text-red-400 border border-red-900/30 rounded-xl text-sm font-bold hover:bg-red-900/60 transition-colors"><Flag size={14} /> Resign</button>
+                            <button
+                                onClick={offerDraw}
+                                disabled={drawOfferedBy === myColor}
+                                className="flex items-center justify-center gap-2 flex-1 bg-zinc-800 disabled:opacity-50 text-zinc-300 rounded-xl text-sm font-bold hover:bg-zinc-700 transition-colors"
+                            >
+                                <Handshake size={14} /> {drawOfferedBy === myColor ? 'Sent' : 'Offer Draw'}
+                            </button>
+                            <button onClick={() => setShowResignModal(true)} className="flex items-center justify-center gap-2 flex-1 bg-red-950/40 text-red-400 border border-red-900/30 rounded-xl text-sm font-bold hover:bg-red-900/60 transition-colors">
+                                <Flag size={14} /> Resign
+                            </button>
                         </div>
                     )}
                 </div>
             </div>
 
-            {/* Resignation Confirmation */}
             {showResignModal && (
                 <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4 backdrop-blur-sm">
                     <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-8 w-full max-w-sm text-center shadow-2xl">
+                        <Skull className="mx-auto text-red-500 mb-4" size={48} />
                         <h3 className="text-xl font-bold text-zinc-100 mb-2">Resign the game?</h3>
                         <p className="text-sm text-zinc-400 mb-8">This will record a loss for your rating.</p>
                         <div className="flex gap-4">
                             <button onClick={() => setShowResignModal(false)} className="flex-1 py-3 bg-zinc-800 text-zinc-300 rounded-xl font-bold hover:bg-zinc-700 transition-colors">Cancel</button>
-                            <button onClick={() => { endGame(myColor === 'white' ? 'black' : 'white', 'resignation'); setShowResignModal(false); }} className="flex-1 py-3 bg-red-600 text-white rounded-xl font-bold hover:bg-red-500 transition-colors shadow-lg shadow-red-900/20">Resign</button>
+                            <button onClick={() => { endGame(myColor === 'white' ? 'black' : 'white', 'resignation', true); setShowResignModal(false); }} className="flex-1 py-3 bg-red-600 text-white rounded-xl font-bold hover:bg-red-500 transition-colors shadow-lg shadow-red-900/20">Resign</button>
                         </div>
                     </div>
                 </div>

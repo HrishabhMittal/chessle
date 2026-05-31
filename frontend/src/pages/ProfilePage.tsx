@@ -40,7 +40,6 @@ export default function ProfilePage() {
   return (
     <div className="flex-1 flex flex-col p-4 md:p-8 w-full max-w-4xl mx-auto h-full min-h-0 gap-6">
       
-      {/* Top Banner & Stats */}
       <div className="shrink-0 flex flex-col md:flex-row gap-6 bg-zinc-900 border border-zinc-800 rounded-2xl p-6 items-center md:items-stretch">
         <div className="flex flex-col items-center justify-center border-b md:border-b-0 md:border-r border-zinc-800 pb-4 md:pb-0 md:pr-8 text-center">
           <div className="w-20 h-20 rounded-xl bg-zinc-950 border border-zinc-800 flex items-center justify-center text-3xl font-bold text-zinc-100 mb-3">{profile.username[0].toUpperCase()}</div>
@@ -64,7 +63,6 @@ export default function ProfilePage() {
         </div>
       </div>
 
-      {/* Win Rate Bar */}
       {profile.games_played > 0 && (
         <div className="shrink-0 bg-zinc-900 border border-zinc-800 rounded-xl p-6">
           <div className="flex justify-between text-xs font-bold uppercase tracking-wider mb-3">
@@ -80,7 +78,6 @@ export default function ProfilePage() {
         </div>
       )}
 
-      {/* Scrollable Game History */}
       <div className="flex-1 flex flex-col bg-zinc-900 border border-zinc-800 rounded-2xl overflow-hidden min-h-0">
         <div className="p-4 border-b border-zinc-800 bg-zinc-950"><h2 className="text-sm font-bold text-zinc-400 uppercase tracking-wider">Recent Matches</h2></div>
         <div className="flex-1 overflow-y-auto p-4 space-y-2">
