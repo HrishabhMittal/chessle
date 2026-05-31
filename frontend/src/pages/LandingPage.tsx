@@ -80,7 +80,7 @@ export default function LandingPage() {
             <span className="text-zinc-600">Free, Forever.</span>
           </h1>
           <p className="text-zinc-400 text-lg mb-8 max-w-md mx-auto lg:mx-0">
-            Clean interface. Zero ads. Just purely responsive chess directly in your browser.
+            Clean interface. Infinite Game Analysis. Personalised Suggestions.
           </p>
           <div className="flex flex-col sm:flex-row gap-4 justify-center lg:justify-start">
             <button onClick={() => user ? document.getElementById('quick-pair')?.scrollIntoView({behavior: 'smooth'}) : navigate('/register')} className="flex items-center justify-center gap-2 bg-zinc-200 hover:bg-white text-zinc-900 font-bold px-8 py-4 rounded-xl transition-colors">

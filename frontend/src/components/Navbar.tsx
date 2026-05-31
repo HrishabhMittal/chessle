@@ -82,10 +82,10 @@ export default function Navbar() {
   }
 
   return (
-    <nav className="h-14 shrink-0 bg-[#161512] border-b border-[#2a2825] flex items-center justify-between px-4 sm:px-6 w-full z-40">
+    <nav className="h-14 shrink-0 bg-[#09090B] border-b border-[#2a2825] flex items-center justify-between px-4 sm:px-6 w-full z-40">
       <Link to="/" className="flex items-center gap-2">
         <div className="w-8 h-8 bg-zinc-200 text-zinc-900 flex items-center justify-center rounded font-bold text-xl">♞</div>
-        <span className="font-bold text-zinc-100 hidden sm:block tracking-wide">KnightMare</span>
+        <span className="font-bold text-zinc-100 hidden sm:block tracking-wide">Chessle</span>
       </Link>
 
       {user && (
