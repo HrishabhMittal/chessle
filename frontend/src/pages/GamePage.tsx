@@ -668,6 +668,20 @@ export default function GamePage() {
                             </button>
                         </div>
                     )}
+                    {gameOver && (
+                        <div className="mt-4 flex flex-col gap-4">
+                            <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 text-center">
+                                <h3 className="text-xl font-bold text-zinc-100 mb-1">Game Over</h3>
+                                <p className="text-zinc-400 capitalize">{result === 'draw' ? 'Draw' : `${result} won`} by {resultReason}</p>
+                            </div>
+                            <button
+                                onClick={() => navigate(`/analysis/${gameId}`)}
+                                className="w-full py-3 bg-zinc-200 hover:bg-white text-zinc-900 rounded-xl font-bold transition-colors flex items-center justify-center gap-2"
+                            >
+                                <Info size={18} /> Analyze Game
+                            </button>
+                        </div>
+                    )}
                 </div>
             </div>
 

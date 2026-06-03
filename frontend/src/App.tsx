@@ -6,37 +6,32 @@ import LoginPage from './pages/LoginPage';
 import RegisterPage from './pages/RegisterPage';
 import GamePage from './pages/GamePage';
 import ProfilePage from './pages/ProfilePage';
+import AnalysisPage from './pages/AnalysisPage'; // <-- Add this import
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
     const { user, loading } = useAuth();
     if (loading) return <div className="flex-1 flex items-center justify-center"><div className="w-8 h-8 border-2 border-zinc-500 border-t-transparent rounded-full animate-spin" /></div>;
-    if (!user) return <Navigate to="/login" replace />;
+    if (!user) return <Navigate to="/login" />;
     return <>{children}</>;
 }
 
-function AuthRoute({ children }: { children: React.ReactNode }) {
-    const { user, loading } = useAuth();
-    if (loading) return <div className="flex-1 flex items-center justify-center"><div className="w-8 h-8 border-2 border-zinc-500 border-t-transparent rounded-full animate-spin" /></div>;
-    if (user) return <Navigate to="/" replace />;
-    return <>{children}</>;
-}
 export default function App() {
     return (
-        <BrowserRouter>
-            <AuthProvider>
-                <Navbar />
-                <main className="flex-1 overflow-y-auto w-full flex flex-col min-h-0">
+        <AuthProvider>
+            <BrowserRouter>
+                <div className="min-h-screen bg-[#09090B] text-zinc-200 flex flex-col font-sans selection:bg-zinc-800">
+                    <Navbar />
                     <Routes>
-                        <Route path="/login" element={<AuthRoute><LoginPage /></AuthRoute>} />
-                        <Route path="/register" element={<AuthRoute><RegisterPage /></AuthRoute>} />
-                        <Route path="/" element={<LandingPage />} />
+                        <Route path="/login" element={<LoginPage />} />
+                        <Route path="/register" element={<RegisterPage />} />
+                        <Route path="/" element={<ProtectedRoute><LandingPage /></ProtectedRoute>} />
                         <Route path="/game/:gameId" element={<ProtectedRoute><GamePage /></ProtectedRoute>} />
-                        <Route path="/profile" element={<ProtectedRoute><ProfilePage /></ProtectedRoute>} />
-                        <Route path="/profile/:username" element={<ProtectedRoute><ProfilePage /></ProtectedRoute>} />
-                        <Route path="*" element={<Navigate to="/" replace />} />
+                        {/* Add the Analysis Route here: */}
+                        <Route path="/analysis/:gameId" element={<ProtectedRoute><AnalysisPage /></ProtectedRoute>} />
+                        <Route path="/profile/:username?" element={<ProtectedRoute><ProfilePage /></ProtectedRoute>} />
                     </Routes>
-                </main>
-            </AuthProvider>
-        </BrowserRouter>
+                </div>
+            </BrowserRouter>
+        </AuthProvider>
     );
 }

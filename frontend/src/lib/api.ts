@@ -30,7 +30,7 @@ export const api = {
     joinMatchmaking: (payload: any) => fetchAPI('/matchmaking/join', { method: 'POST', body: JSON.stringify(payload) }),
     getMatchmakingStatus: (ticketId: string) => fetchAPI(`/matchmaking/status/${ticketId}`),
     cancelMatchmaking: () => fetchAPI('/matchmaking/cancel', { method: 'POST' }),
-
+    requestAnalysis: (gameId: string) => fetchAPI(`/games/${gameId}/analysis`),
     getLobbyChallenges: () => fetchAPI('/challenges/lobby'),
     acceptLobbyChallenge: (id: string) => fetchAPI(`/challenges/${id}/accept_lobby`, { method: 'POST' }),
     getPendingChallenges: () => fetchAPI(`/challenges/pending`),

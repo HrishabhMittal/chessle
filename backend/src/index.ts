@@ -129,13 +129,7 @@ app.post('/api/games', authenticate, async (req, res) => {
     res.json({ data, error });
 });
 async function processRatingChanges(gameId: string, whiteId: string, blackId: string, result: string) {
-    console.log(`\n[RATING SYSTEM] Match ${gameId} ended.`);
-    console.log(`[RATING SYSTEM] Result: ${result}. Calculating new Elo for White (${whiteId}) and Black (${blackId})...`);
-
-
-
-
-
+    console.log(`\n[RATING SYSTEM] Match ${gameId} ended. this function needs to be completed.`);
     return true;
 }
 app.put('/api/games/:id', authenticate, async (req, res) => {
