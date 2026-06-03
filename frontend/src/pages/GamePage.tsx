@@ -116,6 +116,8 @@ export default function GamePage() {
     }, [gameId, user, authLoading]);
 
     async function loadGame() {
+        chessGame.reset();
+
         const { data } = await api.getGame(gameId!);
         if (!data) { navigate('/'); return; }
 
@@ -155,11 +157,8 @@ export default function GamePage() {
             newSocket.on('receive_move', (data) => {
                 chessGame.move(data.move);
                 setChessPosition(chessGame.fen());
-                setWhiteTimeMs(data.whiteTimeMs);
-                setBlackTimeMs(data.blackTimeMs);
                 setCurrentTurn(chessGame.turn() === 'w' ? 'white' : 'black');
                 setMoveHistory(data.history);
-                lastTickRef.current = Date.now();
                 setDrawOfferedBy(null);
 
                 if (premovesRef.current.length > 0) {
@@ -175,6 +174,12 @@ export default function GamePage() {
                         setPremoves([...premovesRef.current]);
                     }, 300);
                 }
+            });
+
+            newSocket.on('sync_clocks', (data) => {
+                setWhiteTimeMs(data.whiteTimeMs);
+                setBlackTimeMs(data.blackTimeMs);
+                lastTickRef.current = Date.now();
             });
 
             newSocket.on('receive_message', (data) => {
@@ -202,13 +207,29 @@ export default function GamePage() {
             lastTickRef.current = Date.now();
             return;
         }
+
+        lastTickRef.current = Date.now();
+
         clockRef.current = setInterval(() => {
             const now = Date.now();
             const elapsed = now - lastTickRef.current;
             lastTickRef.current = now;
-            if (currentTurn === 'white') setWhiteTimeMs(p => { const n = Math.max(0, p - elapsed); if (n === 0) handleTimeout('white'); return n; });
-            else setBlackTimeMs(p => { const n = Math.max(0, p - elapsed); if (n === 0) handleTimeout('black'); return n; });
+
+            if (currentTurn === 'white') {
+                setWhiteTimeMs(p => {
+                    const n = Math.max(0, p - elapsed);
+                    if (n === 0) setTimeout(() => handleTimeout('white'), 0);
+                    return n;
+                });
+            } else {
+                setBlackTimeMs(p => {
+                    const n = Math.max(0, p - elapsed);
+                    if (n === 0) setTimeout(() => handleTimeout('black'), 0);
+                    return n;
+                });
+            }
         }, 100);
+
         return () => { if (clockRef.current) clearInterval(clockRef.current); };
     }, [currentTurn, gameOver, gameStatus, moveHistory.length]);
 
@@ -257,13 +278,17 @@ export default function GamePage() {
     useEffect(() => {
         if (!game?.is_bot_game || gameOver || currentTurn !== game.bot_color || botThinkingRef.current) return;
         botThinkingRef.current = true;
-        setTimeout(() => {
-            const moveSan = getBotMove(chessGame.fen(), botDifficulty);
-            if (moveSan) {
-                const moveRes = chessGame.move(moveSan);
-                if (moveRes) {
-                    setChessPosition(chessGame.fen());
-                    broadcastMove(moveRes);
+        setTimeout(async () => {
+            const moveData = await getBotMove(chessGame.fen(), botDifficulty);
+            if (moveData) {
+                try {
+                    const moveRes = chessGame.move(moveData);
+                    if (moveRes) {
+                        setChessPosition(chessGame.fen());
+                        broadcastMove(moveRes);
+                    }
+                } catch (e) {
+                    console.error("Bot move error:", e);
                 }
             }
             botThinkingRef.current = false;
@@ -274,31 +299,41 @@ export default function GamePage() {
         if (!gameId) return;
         setDrawOfferedBy(null);
 
-        const elapsed = Date.now() - lastTickRef.current;
-        const inc = (game?.time_control_increment ?? 0) * 1000;
-        let newW = whiteTimeMs, newB = blackTimeMs;
-
-        if (chessGame.turn() === 'b') {
-            newW = Math.max(0, whiteTimeMs - elapsed) + inc;
-        } else {
-            newB = Math.max(0, blackTimeMs - elapsed) + inc;
-        }
-
-        setWhiteTimeMs(newW);
-        setBlackTimeMs(newB);
-        setCurrentTurn(chessGame.turn() === 'w' ? 'white' : 'black');
-        lastTickRef.current = Date.now();
-
         const history = chessGame.history({ verbose: true }).map(m => ({ san: m.san, color: m.color === 'w' ? 'white' : 'black' }));
         setMoveHistory(history);
+        const isWhiteMove = chessGame.turn() === 'b';
 
-        if (socketRef.current && !game?.is_bot_game) {
+        if (game?.is_bot_game) {
+            const elapsed = Date.now() - lastTickRef.current;
+            const inc = (game?.time_control_increment ?? 0) * 1000;
+            let newW = whiteTimeMs, newB = blackTimeMs;
+
+            if (isWhiteMove) {
+                newW = Math.max(0, whiteTimeMs - elapsed) + inc;
+            } else {
+                newB = Math.max(0, blackTimeMs - elapsed) + inc;
+            }
+
+            setWhiteTimeMs(newW);
+            setBlackTimeMs(newB);
+            setCurrentTurn(isWhiteMove ? 'black' : 'white');
+            lastTickRef.current = Date.now();
+
+            api.updateGame(gameId, { pgn: chessGame.pgn(), fen: chessGame.fen(), current_turn: isWhiteMove ? 'black' : 'white', white_time_ms: newW, black_time_ms: newB, move_count: history.length });
+        } else if (socketRef.current) {
             socketRef.current.emit('make_move', {
-                gameId, move: moveResult, history, whiteTimeMs: newW, blackTimeMs: newB
+                gameId,
+                move: moveResult,
+                history,
+                isWhiteMove,
+                timeControlIncrement: game?.time_control_increment,
+                pgn: chessGame.pgn(),
+                fen: chessGame.fen()
             });
-        }
 
-        api.updateGame(gameId, { pgn: chessGame.pgn(), fen: chessGame.fen(), current_turn: chessGame.turn() === 'w' ? 'white' : 'black', white_time_ms: newW, black_time_ms: newB, move_count: history.length });
+            setCurrentTurn(isWhiteMove ? 'black' : 'white');
+            lastTickRef.current = Date.now();
+        }
 
         if (chessGame.isGameOver()) {
             if (chessGame.isCheckmate()) endGame(chessGame.turn() === 'w' ? 'black' : 'white', 'checkmate', true);

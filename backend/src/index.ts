@@ -15,7 +15,7 @@ app.use(express.json());
 const server = http.createServer(app);
 
 const io = new Server(server, {
-    cors: { origin: '*', methods: ['GET', 'POST'] }
+    cors: { origin: '*', methods: ['GET', 'POST', 'PUT'] }
 });
 
 const supabase = createClient(
@@ -33,31 +33,72 @@ const authenticate = async (req: express.Request, res: express.Response, next: e
     (req as any).user = user;
     next();
 };
+
+const activeGameClocks = new Map();
+
 io.on('connection', (socket) => {
+
+    socket.on('join_user_room', (userId) => {
+        socket.join(`user:${userId}`);
+    });
+
+    socket.on('send_challenge', (data) => {
+        if (data.challenged_id) {
+            io.to(`user:${data.challenged_id}`).emit('challenge_received', data);
+        } else {
+            socket.broadcast.emit('lobby_challenge_received', data);
+        }
+    });
+
+
     socket.on('join_game', (gameId) => {
         socket.join(gameId);
+        if (!activeGameClocks.has(gameId)) {
+            activeGameClocks.set(gameId, { lastMoveTimestamp: Date.now() });
+        }
     });
 
-    socket.on('make_move', (data) => {
-        socket.to(data.gameId).emit('receive_move', data);
+    socket.on('make_move', async (data) => {
+        const { gameId, move, history, isWhiteMove, timeControlIncrement, pgn, fen } = data;
+        const now = Date.now();
+
+        const clockData = activeGameClocks.get(gameId);
+        const elapsed = now - (clockData?.lastMoveTimestamp || now);
+        activeGameClocks.set(gameId, { lastMoveTimestamp: now });
+
+        try {
+            const { data: game, error } = await supabase.from('games').select('*').eq('id', gameId).single();
+
+            if (game && !error) {
+                let newWhiteTime = game.white_time_ms;
+                let newBlackTime = game.black_time_ms;
+                const incMs = (timeControlIncrement || 0) * 1000;
+
+                if (isWhiteMove) newWhiteTime = Math.max(0, newWhiteTime - elapsed) + incMs;
+                else newBlackTime = Math.max(0, newBlackTime - elapsed) + incMs;
+
+                await supabase.from('games').update({
+                    pgn: pgn, fen: fen, current_turn: isWhiteMove ? 'black' : 'white',
+                    white_time_ms: newWhiteTime, black_time_ms: newBlackTime, move_count: history.length
+                }).eq('id', gameId);
+
+                socket.to(gameId).emit('receive_move', { move, history, whiteTimeMs: newWhiteTime, blackTimeMs: newBlackTime });
+                io.in(gameId).emit('sync_clocks', { whiteTimeMs: newWhiteTime, blackTimeMs: newBlackTime });
+            }
+        } catch (error) {
+            console.error("Error processing server-side move:", error);
+        }
     });
 
-    socket.on('send_message', (data) => {
-        socket.to(data.gameId).emit('receive_message', data);
-    });
-
-    socket.on('offer_draw', (data) => {
-        socket.to(data.gameId).emit('draw_offered', data);
-    });
-
-    socket.on('decline_draw', (data) => {
-        socket.to(data.gameId).emit('draw_declined', data);
-    });
-
+    socket.on('send_message', (data) => { socket.to(data.gameId).emit('receive_message', data); });
+    socket.on('offer_draw', (data) => { socket.to(data.gameId).emit('draw_offered', data); });
+    socket.on('decline_draw', (data) => { socket.to(data.gameId).emit('draw_declined', data); });
     socket.on('game_over', (data) => {
         socket.to(data.gameId).emit('game_over_update', data);
+        activeGameClocks.delete(data.gameId);
     });
 });
+
 app.get('/api/profiles/search/:query', authenticate, async (req, res) => {
     const { data, error } = await supabase.from('profiles').select('id,username,rating').ilike('username', `%${req.params.query}%`).neq('id', (req as any).user.id).limit(8);
     res.json({ data, error });
@@ -87,15 +128,158 @@ app.post('/api/games', authenticate, async (req, res) => {
     const { data, error } = await supabase.from('games').insert({ ...req.body, started_at: new Date().toISOString() }).select().maybeSingle();
     res.json({ data, error });
 });
+async function processRatingChanges(gameId: string, whiteId: string, blackId: string, result: string) {
+    console.log(`\n[RATING SYSTEM] Match ${gameId} ended.`);
+    console.log(`[RATING SYSTEM] Result: ${result}. Calculating new Elo for White (${whiteId}) and Black (${blackId})...`);
 
-app.post('/api/games/moves', authenticate, async (req, res) => {
-    const { data, error } = await supabase.from('game_moves').insert(req.body);
+
+
+
+
+    return true;
+}
+app.put('/api/games/:id', authenticate, async (req, res) => {
+    const gameId = req.params.id as string;
+    const { status, result } = req.body;
+
+
+    if (status === 'completed' && result) {
+
+        const { data: existingGame } = await supabase.from('games').select('*').eq('id', gameId).single();
+
+        if (existingGame && existingGame.status !== 'completed' && existingGame.is_rated) {
+
+            await processRatingChanges(gameId, existingGame.white_player_id, existingGame.black_player_id, result);
+        }
+    }
+
+
+    const { data, error } = await supabase.from('games').update(req.body).eq('id', gameId).select();
     res.json({ data, error });
 });
 
-app.put('/api/games/:id', authenticate, async (req, res) => {
-    const { data, error } = await supabase.from('games').update(req.body).eq('id', req.params.id).select();
+app.post('/api/challenges', authenticate, async (req, res) => {
+    const { data, error } = await supabase.from('challenges').insert({ ...req.body, created_at: new Date().toISOString() }).select().maybeSingle();
     res.json({ data, error });
+});
+
+app.get('/api/challenges/pending', authenticate, async (req, res) => {
+    const userId = (req as any).user.id;
+    const { data, error } = await supabase.from('challenges').select('*').eq('challenged_id', userId).eq('status', 'pending');
+    res.json({ data, error });
+});
+
+app.get('/api/challenges/lobby', authenticate, async (req, res) => {
+    const userId = (req as any).user.id;
+    const { data: userProfile } = await supabase.from('profiles').select('rating').eq('id', userId).single();
+    const userRating = userProfile?.rating || 1200;
+
+    const { data: challenges, error } = await supabase
+        .from('challenges')
+        .select('*')
+        .is('challenged_id', null)
+        .eq('status', 'open')
+        .order('created_at', { ascending: false })
+        .limit(100);
+
+    if (error) return res.status(500).json({ error: error.message });
+
+    const challengerIds = [...new Set((challenges || []).map(c => c.challenger_id))];
+    const profilesMap: Record<string, any> = {};
+
+    if (challengerIds.length > 0) {
+        const { data: profiles } = await supabase
+            .from('profiles')
+            .select('id, username, rating')
+            .in('id', challengerIds);
+
+        if (profiles) {
+            profiles.forEach(p => profilesMap[p.id] = p);
+        }
+    }
+    const filtered = (challenges || []).filter((c: any) => {
+        if (c.challenger_id === userId) return false;
+        const challengerProfile = profilesMap[c.challenger_id];
+        if (!challengerProfile) return true;
+        return Math.abs(challengerProfile.rating - userRating) <= 400;
+    }).map((c: any) => ({
+        ...c,
+        challenger: profilesMap[c.challenger_id] || { username: 'Unknown', rating: 1200 }
+    })).slice(0, 20);
+    res.json({ data: filtered });
+});
+
+
+app.put('/api/challenges/:id/respond', authenticate, async (req, res) => {
+    const { status } = req.body;
+    const challengeId = req.params.id;
+
+    const { data: challenge } = await supabase
+        .from('challenges').select('*').eq('id', challengeId).maybeSingle();
+
+    if (!challenge) return res.status(404).json({ error: 'Challenge not found' });
+
+    await supabase.from('challenges').update({ status }).eq('id', challengeId);
+
+    if (status === 'accepted') {
+        const timeMs = challenge.time_control_minutes * 60 * 1000;
+
+        const { data: newGame } = await supabase.from('games').insert({
+            white_player_id: challenge.challenger_id,
+            black_player_id: challenge.challenged_id,
+            time_control_minutes: challenge.time_control_minutes,
+            time_control_increment: challenge.time_control_increment,
+            white_time_ms: timeMs, black_time_ms: timeMs,
+            status: 'active',
+            is_rated: challenge.is_rated ?? true,
+            started_at: new Date().toISOString()
+        }).select().maybeSingle();
+
+        io.to(`user:${challenge.challenger_id}`).emit('challenge_accepted', { gameId: newGame.id });
+        io.to(`user:${challenge.challenged_id}`).emit('challenge_accepted', { gameId: newGame.id });
+
+        return res.json({ data: newGame });
+    }
+
+    res.json({ success: true });
+});
+
+
+app.post('/api/challenges/:id/accept_lobby', authenticate, async (req, res) => {
+    const userId = (req as any).user.id;
+    const challengeId = req.params.id;
+
+    const { data: challenge, error } = await supabase.from('challenges').select('*').eq('id', challengeId).single();
+    if (error || !challenge || challenge.status !== 'open') return res.status(400).json({ error: 'Challenge no longer available' });
+    if (challenge.challenger_id === userId) return res.status(400).json({ error: 'Cannot accept own challenge' });
+
+    await supabase.from('challenges').update({ status: 'accepted' }).eq('id', challengeId);
+
+    const color = challenge.challenger_color === 'random' ? (Math.random() < 0.5 ? 'white' : 'black') : challenge.challenger_color;
+    const whiteId = color === 'white' ? challenge.challenger_id : userId;
+    const blackId = color === 'black' ? challenge.challenger_id : userId;
+    const timeMs = challenge.time_control_minutes * 60 * 1000;
+
+    const { data: newGame, error: gameError } = await supabase.from('games').insert({
+        white_player_id: whiteId,
+        black_player_id: blackId,
+        time_control_minutes: challenge.time_control_minutes,
+        time_control_increment: challenge.time_control_increment,
+        white_time_ms: timeMs,
+        black_time_ms: timeMs,
+        status: 'active',
+        is_rated: challenge.is_rated ?? true,
+        started_at: new Date().toISOString()
+    }).select().single();
+
+    if (gameError) return res.status(500).json({ error: gameError.message });
+
+    await supabase.from('challenges').update({ matched_game_id: newGame.id }).eq('id', challengeId);
+
+
+    io.to(`user:${challenge.challenger_id}`).emit('challenge_accepted', { gameId: newGame.id });
+
+    res.json({ data: newGame });
 });
 
 interface QueueTicket { id: string; userId: string; rating: number; timeMin: number; timeInc: number; joinedAt: number; matchedGameId: string | null; }
@@ -162,7 +346,9 @@ setInterval(async () => {
                 const timeMs = p1.timeMin * 60 * 1000;
 
                 const { data: newGame, error } = await supabase.from('games').insert({
-                    white_player_id: whiteId, black_player_id: blackId, time_control_minutes: p1.timeMin, time_control_increment: p1.timeInc, white_time_ms: timeMs, black_time_ms: timeMs, status: 'active', started_at: new Date().toISOString()
+                    white_player_id: whiteId, black_player_id: blackId, time_control_minutes: p1.timeMin,
+                    time_control_increment: p1.timeInc, white_time_ms: timeMs, black_time_ms: timeMs,
+                    status: 'active', is_rated: true, started_at: new Date().toISOString()
                 }).select().maybeSingle();
 
                 if (newGame && !error) {
